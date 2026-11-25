@@ -11,11 +11,14 @@ RUN java -Djarmode=tools -jar app.jar extract --layers --destination extracted
 # --- Étage 2 : runtime ---
 FROM eclipse-temurin:25-jre@sha256:4ed132f6832e9804b123e89a849a7b4502756ae64a4ee08ebab939d9d5d0a9fa
 WORKDIR /app
-RUN groupadd --system app && useradd --system --gid app --no-create-home app
+# UID/GID fixes et numériques : Kubernetes (runAsNonRoot) ne peut vérifier
+# qu'un utilisateur n'est pas root que s'il est déclaré par un numéro
+RUN groupadd --system --gid 10001 app \
+ && useradd --system --uid 10001 --gid app --no-create-home app
 COPY --from=extract /tmp/extracted/dependencies/ ./
 COPY --from=extract /tmp/extracted/spring-boot-loader/ ./
 COPY --from=extract /tmp/extracted/snapshot-dependencies/ ./
 COPY --from=extract /tmp/extracted/application/ ./
-USER app
+USER 10001:10001
 EXPOSE 8080
 ENTRYPOINT ["java","-jar","/app/app.jar"]
