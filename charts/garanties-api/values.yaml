@@ -1,0 +1,16 @@
+image:
+  repository: ghcr.io/glinprivate/garanties-api
+  # vide exprès : à fournir au déploiement (--set image.digest=sha256:…),
+  # le template refuse de générer quoi que ce soit sans lui
+  digest: ""
+imagePullSecrets:
+  - name: ghcr-pull
+replicaCount: 1
+resources:
+  requests: { cpu: 100m, memory: 256Mi }
+  limits:   { memory: 512Mi }
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  protocol: TCP
