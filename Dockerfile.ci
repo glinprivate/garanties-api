@@ -1,0 +1,21 @@
+# Image de CI « build once » : aucune compilation ici.
+# Le jar arrive déjà compilé et testé par le job build-test (dist/app.jar).
+# Pour un build local depuis les sources, utiliser le Dockerfile classique.
+
+# --- Étage 1 : découpe du jar en couches Spring Boot ---
+FROM eclipse-temurin:25-jre@sha256:4ed132f6832e9804b123e89a849a7b4502756ae64a4ee08ebab939d9d5d0a9fa AS extract
+WORKDIR /tmp
+COPY dist/app.jar app.jar
+RUN java -Djarmode=tools -jar app.jar extract --layers --destination extracted
+
+# --- Étage 2 : runtime ---
+FROM eclipse-temurin:25-jre@sha256:4ed132f6832e9804b123e89a849a7b4502756ae64a4ee08ebab939d9d5d0a9fa
+WORKDIR /app
+RUN groupadd --system app && useradd --system --gid app --no-create-home app
+COPY --from=extract /tmp/extracted/dependencies/ ./
+COPY --from=extract /tmp/extracted/spring-boot-loader/ ./
+COPY --from=extract /tmp/extracted/snapshot-dependencies/ ./
+COPY --from=extract /tmp/extracted/application/ ./
+USER app
+EXPOSE 8080
+ENTRYPOINT ["java","-jar","/app/app.jar"]
