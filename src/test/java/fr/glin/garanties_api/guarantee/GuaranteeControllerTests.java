@@ -28,7 +28,7 @@ class GuaranteeControllerTests {
     void returnsThreeGuarantees() throws Exception {
         mockMvc.perform(get("/api/guarantees"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$.length()").value(4))
                 .andExpect(jsonPath("$[0].ref").value("GAR-2026-001"))
                 .andExpect(jsonPath("$[0].amount").value(150000.00))
                 .andExpect(jsonPath("$[0].currency").value("EUR"));
