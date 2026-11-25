@@ -14,6 +14,9 @@ env:
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    outputs:
+      # empreinte du jar, transmise au job image pour vérification
+      jar-sha256: ${{ steps.jar.outputs.sha256 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
@@ -23,6 +26,19 @@ jobs:
           cache: maven
       # tests + quality gate JaCoCo
       - run: ./mvnw -B verify
+      # build once : ce jar testé est le seul qui partira dans l'image
+      - name: Empreinte du jar
+        id: jar
+        run: |
+          sha256sum target/*.jar
+          echo "sha256=$(sha256sum target/*.jar | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Publication du jar
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app-jar
+          path: target/*.jar
+          if-no-files-found: error
+          retention-days: 7
 
   image:
     # pas d'image si les tests échouent
@@ -34,11 +50,28 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - name: Récupération du jar testé
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: app-jar
+          path: dist/
+      - name: Vérification de l'empreinte
+        env:
+          EXPECTED: ${{ needs.build-test.outputs.jar-sha256 }}
+        run: |
+          sha256sum dist/*.jar
+          echo "attendu : $EXPECTED"
+          # le pipeline échoue si le jar a changé entre les deux jobs
+          echo "$EXPECTED  $(ls dist/*.jar)" | sha256sum --check
+          # nom fixe attendu par Dockerfile.ci (renommer ne change pas l'empreinte)
+          mv dist/*.jar dist/app.jar
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Build (local, pas encore poussée)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
+          # aucune compilation ici : l'image emballe le jar reçu
+          file: Dockerfile.ci
           load: true
           tags: ${{ env.IMAGE }}:${{ github.sha }}
       - name: Scan de vulnérabilités
