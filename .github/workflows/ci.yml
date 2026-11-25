@@ -17,6 +17,8 @@ jobs:
     outputs:
       # empreinte du jar, transmise au job image pour vérification
       jar-sha256: ${{ steps.jar.outputs.sha256 }}
+      # version lue dans le pom.xml, pour le tag lisible de l'image
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
@@ -26,6 +28,13 @@ jobs:
           cache: maven
       # tests + quality gate JaCoCo
       - run: ./mvnw -B verify
+      - name: Version du projet (pom.xml)
+        id: version
+        run: |
+          # Maven résout la version comme il le fait au build (héritage du parent compris)
+          version=$(./mvnw -B -q help:evaluate -Dexpression=project.version -DforceStdout)
+          echo "version : $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       # build once : ce jar testé est le seul qui partira dans l'image
       - name: Empreinte du jar
         id: jar
@@ -65,6 +74,15 @@ jobs:
           echo "$EXPECTED  $(ls dist/*.jar)" | sha256sum --check
           # nom fixe attendu par Dockerfile.ci (renommer ne change pas l'empreinte)
           mv dist/*.jar dist/app.jar
+      - name: Tag lisible (version + SHA court)
+        id: tag
+        env:
+          VERSION: ${{ needs.build-test.outputs.version }}
+        run: |
+          # ex. 0.1.0-ab675a6 : pour les humains, le déploiement reste par digest
+          tag="${VERSION}-${GITHUB_SHA::7}"
+          echo "tag lisible : $tag"
+          echo "readable=$tag" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Build (local, pas encore poussée)
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
@@ -73,7 +91,10 @@ jobs:
           # aucune compilation ici : l'image emballe le jar reçu
           file: Dockerfile.ci
           load: true
-          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          # deux étiquettes sur la même image : Trivy scanne donc exactement ce qui sera poussé
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:${{ steps.tag.outputs.readable }}
       - name: Scan de vulnérabilités
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -91,4 +112,66 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Push
         if: github.ref == 'refs/heads/main'
-        run: docker push ${{ env.IMAGE }}:${{ github.sha }}
+        env:
+          READABLE: ${{ steps.tag.outputs.readable }}
+        run: |
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:$READABLE"
+          # les deux tags pointent vers le même contenu, donc le même digest
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$GITHUB_SHA" | cut -d@ -f2)
+          {
+            echo "### Image publiée"
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Tag lisible | \`$READABLE\` |"
+            echo "| Tag commit | \`$GITHUB_SHA\` |"
+            echo "| **Digest (à déployer)** | \`$digest\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  chart:
+    # indépendant des autres jobs : un chart cassé est signalé même si le code est bon
+    runs-on: ubuntu-latest
+    env:
+      CHART: charts/garanties-api
+      KUBECONFORM_VERSION: v0.8.0
+      # empreinte officielle (fichier CHECKSUMS de la release) : binaire vérifié avant usage
+      KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+      # version de Kubernetes dont les schémas servent à la validation
+      KUBERNETES_VERSION: 1.37.0
+      # digest factice : le template l'exige (required), seul son format compte ici
+      FAKE_DIGEST: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v4.3.2
+      - name: Installation de kubeconform
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/kubeconform.tar.gz" \
+            "https://github.com/yannh/kubeconform/releases/download/$KUBECONFORM_VERSION/kubeconform-linux-amd64.tar.gz"
+          echo "$KUBECONFORM_SHA256  $RUNNER_TEMP/kubeconform.tar.gz" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/bin"
+          tar -xzf "$RUNNER_TEMP/kubeconform.tar.gz" -C "$RUNNER_TEMP/bin" kubeconform
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: helm lint
+        run: |
+          # chaque environnement : valeurs par défaut, puis recette et prod par-dessus
+          for env in defaut recette prod; do
+            args=()
+            [ "$env" != defaut ] && args=(-f "$CHART/values-$env.yaml")
+            echo "::group::helm lint ($env)"
+            helm lint --strict "$CHART" "${args[@]}" --set image.digest="$FAKE_DIGEST"
+            echo "::endgroup::"
+          done
+      - name: helm template | kubeconform
+        run: |
+          # sans pipefail, un helm template en échec donnerait « 0 ressource, OK » à kubeconform
+          set -o pipefail
+          for env in defaut recette prod; do
+            args=()
+            [ "$env" != defaut ] && args=(-f "$CHART/values-$env.yaml")
+            echo "::group::kubeconform ($env)"
+            helm template garanties "$CHART" "${args[@]}" --set image.digest="$FAKE_DIGEST" \
+              | kubeconform -strict -summary -kubernetes-version "$KUBERNETES_VERSION"
+            echo "::endgroup::"
+          done

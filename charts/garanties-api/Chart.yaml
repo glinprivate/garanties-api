@@ -1,0 +1,13 @@
+apiVersion: v2
+name: garanties-api
+description: Chart Helm pour déployer l'API Garanties
+icon: https://raw.githubusercontent.com/glinprivate/garanties-api/main/charts/garanties-api/icon.svg
+type: application        # ou "library"
+version: 0.1.0           # version du chart (SemVer)
+appVersion: "1.0.0"      # version de l'appli déployée
+keywords:
+  - api
+  - spring-boot
+maintainers:
+  - name: Ton Nom
+    email: toi@exemple.fr
