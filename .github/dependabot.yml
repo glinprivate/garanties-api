@@ -1,0 +1,26 @@
+# Dependabot ouvre une pull request dès qu'une dépendance a une nouvelle version.
+# Chaque PR passe par la CI (tests, couverture, build d'image, scan Trivy)
+# avant de pouvoir être fusionnée dans main.
+version: 2
+updates:
+  # Actions GitHub épinglées par SHA dans .github/workflows/
+  # Dependabot met à jour le SHA et le commentaire "# vX.Y.Z".
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Images de base du Dockerfile (eclipse-temurin:25-jdk / 25-jre, épinglées par digest)
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Dépendances Maven (parent Spring Boot, plugins JaCoCo, etc.)
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
