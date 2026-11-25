@@ -1,5 +1,5 @@
 # --- Étage 1 : build ---
-FROM eclipse-temurin:25-jdk AS build
+FROM eclipse-temurin:25-jdk@sha256:<digest> AS build
 WORKDIR /workspace
 COPY mvnw pom.xml ./
 COPY .mvn .mvn
@@ -9,7 +9,7 @@ RUN ./mvnw -q -DskipTests package && cp target/*.jar app.jar
 RUN java -Djarmode=tools -jar app.jar extract --layers --destination extracted
 
 # --- Étage 2 : runtime ---
-FROM eclipse-temurin:25-jre
+FROM eclipse-temurin:25-jre@sha256:<digest>
 WORKDIR /app
 RUN groupadd --system app && useradd --system --gid app --no-create-home app
 COPY --from=build /workspace/extracted/dependencies/ ./
